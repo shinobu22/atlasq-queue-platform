@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # Using existing Redis from host
+  # redis:
+  #   image: redis:7-alpine
+  #   ports:
+  #     - "6379:6379"
+  #   command: redis-server --requirepass atlasqredis --appendonly yes
+  #   volumes:
+  #     - redis_data:/data
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "-a", "atlasqredis", "ping"]
+  #     interval: 10s
+  #     timeout: 3s
+  #     retries: 5
+
+  producer:
+    build:
+      context: ../../
+      dockerfile: deployments/docker/Dockerfile.producer
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_ENV=docker
+      - REDIS_ADDR=host.docker.internal:6379
+      - REDIS_PASSWORD=
+      - HTTP_ADDR=:8080
+    labels:
+      - "co.elastic.logs/enabled=true"
+      - "co.elastic.logs/json.keys_under_root=true"
+      - "co.elastic.logs/json.add_error_key=true"
+
+  worker:
+    build:
+      context: ../../
+      dockerfile: deployments/docker/Dockerfile.worker
+    ports:
+      - "9090:9090"
+    environment:
+      - APP_ENV=docker
+      - REDIS_ADDR=host.docker.internal:6379
+      - REDIS_PASSWORD=
+      - WORKER_METRICS_ADDR=:9090
+    labels:
+      - "co.elastic.logs/enabled=true"
+      - "co.elastic.logs/json.keys_under_root=true"
+      - "co.elastic.logs/json.add_error_key=true"
+
+  asynqmon:
+    image: hibiken/asynqmon:latest
+    platform: linux/amd64
+    ports:
+      - "8081:8080"
+    environment:
+      - ASYNQMON_REDIS_ADDR=redis:6379
+      - ASYNQMON_REDIS_PASSWORD=
+    restart: unless-stopped
+    networks:
+      - atlasq-network
+    external_links:
+      - redis:redis
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=atlasq-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./elasticsearch/ilm.json:/usr/share/elasticsearch/config/ilm.json
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.0
+    ports:
+      - "5044:5044"
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
+    environment:
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9600/_node/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.12.0
+    user: root
+    volumes:
+      - ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - LOGSTASH_HOST=logstash:5044
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      logstash:
+        condition: service_healthy
+    command: filebeat -e -strict.perms=false
+
+volumes:
+  redis_data:
+  elasticsearch_data:
+
+networks:
+  atlasq-network:
+    external: true

@@ -1,0 +1,52 @@
+filebeat.inputs:
+- type: docker
+  containers.ids:
+    - "*"
+  processors:
+    - add_docker_metadata:
+        host: "unix:///var/run/docker.sock"
+    - decode_json_fields:
+        fields: ["message"]
+        target: ""
+        overwrite_keys: true
+        when:
+          contains:
+            message: '{'
+    - drop_fields:
+        fields: ["host", "agent", "ecs", "input"]
+    - drop_event:
+        when:
+          not:
+            or:
+              - contains:
+                  docker.container.labels.co.elastic.logs/enabled: "true"
+              - contains:
+                  docker.container.name: "atlasq"
+
+processors:
+  - add_fields:
+      target: ""
+      fields:
+        environment: docker
+        cluster: atlasq
+  - timestamp:
+      field: ts
+      layouts:
+        - '2006-01-02T15:04:05.000Z'
+        - '2006-01-02T15:04:05Z'
+      test:
+        - '2023-01-02T15:04:05.000Z'
+
+output.logstash:
+  hosts: ["${LOGSTASH_HOST:logstash:5044}"]
+
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+setup.template.enabled: false
+setup.ilm.enabled: false
