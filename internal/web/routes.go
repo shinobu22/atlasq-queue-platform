@@ -16,7 +16,7 @@ import (
 )
 
 type EnqueueRequest struct {
-	Payload interface{} `json:"payload"`
+	Payload any `json:"payload"`
 }
 
 type EnqueueResponse struct {
@@ -47,6 +47,19 @@ type OrderRequest struct {
 
 type OrderResponse struct {
 	Status string `json:"status"`
+}
+
+type StockResponse struct {
+	Status string      `json:"status"`
+	Stocks []StockItem `json:"stocks"`
+}
+
+type StockItem struct {
+	Symbol    string  `json:"symbol"`
+	Price     float64 `json:"price"`
+	Change    float64 `json:"change"`
+	Volume    int64   `json:"volume"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
 func setupRoutes(r chi.Router, cfg *config.Config, client *tasks.Client, idempotencyMgr *tasks.IdempotencyManager) {
@@ -260,6 +273,48 @@ func parseEnqueueOptions(r *http.Request) (*tasks.EnqueueOptions, error) {
 	}
 
 	return opts, nil
+}
+
+func handleStocks(_ *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		log := logger.FromContext(ctx)
+
+		log.Info("Fetching stock data")
+
+		stocks := []StockItem{
+			{
+				Symbol:    "AAPL",
+				Price:     150.25,
+				Change:    2.15,
+				Volume:    12500000,
+				UpdatedAt: time.Now().Format(time.RFC3339),
+			},
+			{
+				Symbol:    "GOOGL",
+				Price:     2800.50,
+				Change:    -15.30,
+				Volume:    8750000,
+				UpdatedAt: time.Now().Format(time.RFC3339),
+			},
+			{
+				Symbol:    "MSFT",
+				Price:     425.75,
+				Change:    8.25,
+				Volume:    15200000,
+				UpdatedAt: time.Now().Format(time.RFC3339),
+			},
+		}
+
+		response := &StockResponse{
+			Status: "success",
+			Stocks: stocks,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	}
 }
 
 func writeErrorResponse(w http.ResponseWriter, statusCode int, message string) {
